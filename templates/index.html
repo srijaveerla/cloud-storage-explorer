@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloud Storage Explorer</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --text:#1f2430; --muted:#6b7280; --accent:#2563eb; --line:#e5e7eb; --danger:#dc2626; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b1f2a; --text:#e6e8ee; --muted:#9aa3b2; --line:#2a2f3c; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Arial,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:960px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:22px; margin:0 0 4px; } .sub { color:var(--muted); font-size:13px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+  input[type=text] { padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  button, .btn { padding:8px 12px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; font-size:14px; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  button.del { background:transparent; color:var(--danger); border:1px solid var(--line); }
+  .crumbs { margin-bottom:10px; font-size:14px; } .crumbs a { color:var(--accent); cursor:pointer; text-decoration:none; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; color:var(--muted); font-weight:500; padding:8px; border-bottom:1px solid var(--line); }
+  td { padding:8px; border-bottom:1px solid var(--line); } td.r { text-align:right; white-space:nowrap; }
+  .name { cursor:pointer; } .name:hover { color:var(--accent); }
+  .empty { color:var(--muted); padding:24px; text-align:center; }
+  #drop { border:2px dashed var(--line); border-radius:10px; padding:14px; text-align:center; color:var(--muted); margin-bottom:12px; }
+  #drop.over { border-color:var(--accent); color:var(--accent); }
+  #msg { font-size:13px; color:var(--muted); margin-top:8px; min-height:18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>☁️ Cloud Storage Explorer</h1>
+  <div class="sub">Backend: <b>{{ backend }}</b> &middot; browse, upload, download and delete files</div>
+  <div class="card">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="bar">
+      <input type="text" id="search" placeholder="Filter this folder...">
+      <input type="text" id="folderName" placeholder="New folder name">
+      <button class="ghost" onclick="newFolder()">Create folder</button>
+      <button onclick="document.getElementById('picker').click()">Upload files</button>
+      <input type="file" id="picker" multiple hidden>
+    </div>
+    <div id="drop">Drag &amp; drop files here to upload</div>
+    <table>
+      <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="msg"></div>
+  </div>
+</div>
+<script>
+let prefix = "", data = {folders:[], files:[]};
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const size = n => n < 1024 ? n+" B" : n < 1048576 ? (n/1024).toFixed(1)+" KB" : (n/1048576).toFixed(1)+" MB";
+const say = t => $("msg").textContent = t;
+
+async function load(p = prefix) {
+  prefix = p;
+  const r = await fetch("/api/list?prefix=" + encodeURIComponent(prefix));
+  data = await r.json(); render();
+}
+function render() {
+  const parts = prefix.split("/").filter(Boolean);
+  let acc = "", html = '<a onclick="load(\'\')">Root</a>';
+  parts.forEach(p => { acc += p + "/"; html += ' / <a onclick="load(\'' + esc(acc) + '\')">' + esc(p) + '</a>'; });
+  $("crumbs").innerHTML = html;
+  const q = $("search").value.toLowerCase();
+  const rows = [];
+  data.folders.filter(f => f.name.toLowerCase().includes(q)).forEach(f => rows.push(
+    '<tr><td class="name" onclick="load(\'' + esc(f.key) + '\')">📁 ' + esc(f.name) + '</td><td>-</td><td>-</td>' +
+    '<td class="r"><button class="del" onclick="del(\'' + esc(f.key) + '\')">Delete</button></td></tr>'));
+  data.files.filter(f => f.name.toLowerCase().includes(q)).forEach(f => rows.push(
+    '<tr><td>📄 ' + esc(f.name) + '</td><td>' + size(f.size) + '</td><td>' + f.modified + '</td>' +
+    '<td class="r"><a class="btn" href="/api/download?key=' + encodeURIComponent(f.key) + '">Download</a> ' +
+    '<button class="del" onclick="del(\'' + esc(f.key) + '\')">Delete</button></td></tr>'));
+  $("rows").innerHTML = rows.join("") || '<tr><td colspan="4" class="empty">This folder is empty</td></tr>';
+}
+async function upload(files) {
+  if (!files.length) return;
+  const fd = new FormData(); fd.append("prefix", prefix);
+  [...files].forEach(f => fd.append("files", f));
+  say("Uploading...");
+  const r = await fetch("/api/upload", {method:"POST", body:fd});
+  say(r.ok ? "Upload complete" : "Upload failed (max 50 MB per request)"); load();
+}
+async function del(key) {
+  if (!confirm("Delete " + key + " ? This cannot be undone.")) return;
+  await fetch("/api/delete", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({key})});
+  say("Deleted"); load();
+}
+async function newFolder() {
+  const name = $("folderName").value.trim(); if (!name) return say("Enter a folder name");
+  await fetch("/api/folder", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({prefix, name})});
+  $("folderName").value = ""; load();
+}
+$("picker").onchange = e => upload(e.target.files);
+$("search").oninput = render;
+const drop = $("drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files); };
+load("");
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+local_storage/*
+!local_storage/.gitkeep
+.pytest_cache/
+*.pem
+credentials
